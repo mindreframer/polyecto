@@ -1,5 +1,9 @@
 # PolyEcto
 
+[![CI](https://github.com/mindreframer/polyecto/actions/workflows/ci.yml/badge.svg)](https://github.com/mindreframer/polyecto/actions/workflows/ci.yml)
+[![Hex.pm](https://img.shields.io/hexpm/v/polyecto.svg)](https://hex.pm/packages/polyecto)
+[![Documentation](https://img.shields.io/badge/hex-docs-blue.svg)](https://hexdocs.pm/polyecto)
+
 A generic, configurable library for polymorphic associations in Ecto schemas. PolyEcto provides a clean, efficient way to create "belongs to any" and "has many polymorphic" relationships without sacrificing Ecto's familiar patterns.
 
 See the [detailed documentation](lib/polyecto/README.md) for comprehensive usage examples and API reference.

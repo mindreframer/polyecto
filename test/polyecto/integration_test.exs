@@ -287,7 +287,7 @@ defmodule PolyEcto.IntegrationTest do
       comment_ids = Enum.map(all_comments, & &1.id)
 
       # Reload comments without associations
-      reloaded = TestRepo.all(from c in TestComment, where: c.id in ^comment_ids)
+      reloaded = TestRepo.all(from(c in TestComment, where: c.id in ^comment_ids))
 
       # Count queries - this is a simple test, in production you'd use telemetry
       # The preload should make at most 2 queries (one per table type)
@@ -330,7 +330,7 @@ defmodule PolyEcto.IntegrationTest do
 
       # Reload cards
       card_ids = Enum.map(Enum.take(cards, 10), & &1.id)
-      reloaded_cards = TestRepo.all(from c in TestCard, where: c.id in ^card_ids)
+      reloaded_cards = TestRepo.all(from(c in TestCard, where: c.id in ^card_ids))
 
       # Batch preload - should use single query
       cards_with_comments = PolyEcto.preload_polymorphic_assoc(reloaded_cards, :comments)
@@ -362,7 +362,7 @@ defmodule PolyEcto.IntegrationTest do
 
       # Reload and preload in batches
       comment_ids = Enum.map(comments, & &1.id)
-      reloaded = TestRepo.all(from c in TestComment, where: c.id in ^comment_ids)
+      reloaded = TestRepo.all(from(c in TestComment, where: c.id in ^comment_ids))
 
       # Time the batch preload (basic performance check)
       {time_microseconds, result} =
