@@ -1,8 +1,8 @@
 defmodule PolyectoTest do
   use ExUnit.Case
-  doctest Polyecto
+  doctest PolyEcto
 
-  test "greets the world" do
-    assert Polyecto.hello() == :world
+  test "basic module loaded" do
+    assert Code.ensure_loaded?(PolyEcto)
   end
 end
