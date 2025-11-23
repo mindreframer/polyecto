@@ -46,3 +46,6 @@
   - Best practices
   - Common pitfalls and troubleshooting
   - Advanced usage patterns
+  - **Limitations section** clearly explaining that only one-to-many relationships are supported (not many-to-many)
+- CI/CD setup with GitHub Actions
+- Publishing guide for Hex.pm

@@ -219,19 +219,19 @@ end)
 You can customize the generated field names:
 
 ```elixir
-schema "tags" do
-  polymorphic_belongs_to :taggable,
-    table_field: :entity_table,
-    id_field: :entity_id
+schema "notifications" do
+  polymorphic_belongs_to :notifiable,
+    table_field: :target_table,
+    id_field: :target_id
 
-  field :name, :string
+  field :message, :string
 end
 ```
 
 This generates:
-- `entity_table` instead of `taggable_table`
-- `entity_id` instead of `taggable_id`
-- `taggable` (virtual field name unchanged)
+- `target_table` instead of `notifiable_table`
+- `target_id` instead of `notifiable_id`
+- `notifiable` (virtual field name unchanged)
 
 ## Performance
 
@@ -422,34 +422,40 @@ comment = get_comment(123, preload: [commentable: true])
 You can have polymorphic associations on both sides:
 
 ```elixir
-# Tags can tag any entity
-defmodule Tag do
+# Activity log entries can track actions on any entity
+defmodule ActivityLog do
   use Ecto.Schema
   import PolyEcto
 
-  schema "tags" do
-    polymorphic_belongs_to :taggable
-    field :name, :string
+  schema "activity_logs" do
+    polymorphic_belongs_to :target  # The entity that was acted upon
+    field :action, :string
+    field :user_id, :string
+    timestamps()
   end
 end
 
-# Any entity can have tags
+# Any entity can have activity logs
 defmodule Post do
   use Ecto.Schema
   import PolyEcto
 
   schema "posts" do
     field :title, :string
-    polymorphic_has_many :tags, Tag, as: :taggable
+    polymorphic_has_many :activity_logs, ActivityLog, as: :target
     polymorphic_has_many :comments, Comment, as: :commentable
   end
 end
 
 # Load nested associations
 post = Repo.get!(Post, 1)
-|> PolyEcto.preload_polymorphic_assoc(:tags)
+|> PolyEcto.preload_polymorphic_assoc(:activity_logs)
 |> PolyEcto.preload_polymorphic_assoc(:comments)
 ```
+
+**Note**: Each ActivityLog belongs to one entity. This is a **one-to-many** relationship. 
+For true many-to-many polymorphic tagging, you would need a join table, which PolyEcto 
+does not provide. See the "Limitations" section below.
 
 ### Counting Polymorphic Associations
 
@@ -935,6 +941,57 @@ Databases cannot enforce foreign keys to multiple tables. This is a fundamental 
 - **Universal**: Handles UUIDs, custom strings, and numeric IDs
 - **Simple**: Single column type
 - **Flexible**: Cast to proper type when loading
+
+## Limitations
+
+### What PolyEcto Does NOT Support
+
+**Many-to-Many Polymorphic Relationships**
+
+PolyEcto only supports **one-to-many** polymorphic relationships:
+- ✅ A Comment belongs to one Post/Article/Card (polymorphic belongs_to)
+- ✅ A Post has many Comments (polymorphic has_many)
+- ❌ A Tag belongs to many Posts/Articles/Cards (many-to-many)
+
+**Why Not?**
+
+For many-to-many polymorphic relationships (like tagging), you need a **join table**:
+
+```elixir
+# This DOES NOT work with PolyEcto:
+defmodule Tag do
+  schema "tags" do
+    polymorphic_belongs_to :taggable  # ❌ Can only tag ONE entity
+    field :name, :string
+  end
+end
+
+# You need a join table instead:
+defmodule Tag do
+  schema "tags" do
+    field :name, :string
+    has_many :taggings, Tagging
+  end
+end
+
+defmodule Tagging do
+  schema "taggings" do
+    belongs_to :tag, Tag
+    polymorphic_belongs_to :taggable  # ✅ Each tagging links one tag to one entity
+  end
+end
+```
+
+**When to Use PolyEcto**:
+- Comments on multiple entity types ✅
+- Activity logs for any entity ✅
+- Notifications about different entities ✅
+- File attachments to various records ✅
+
+**When NOT to Use PolyEcto**:
+- Tagging systems (need many-to-many) ❌
+- Categories shared by multiple entities ❌
+- Any scenario where the relationship is many-to-many ❌
 
 ## API Reference
 
