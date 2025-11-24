@@ -7,8 +7,8 @@ defmodule PolyEctoTest.TestCard do
 
   @primary_key {:id, :string, autogenerate: false}
   schema "test_cards" do
-    field(:text, :string)
-    polymorphic_has_many(:comments, PolyEctoTest.TestComment, as: :commentable)
+    field :text, :string
+    polymorphic_has_many :comments, PolyEctoTest.TestComment, as: :commentable
     timestamps()
   end
 end
@@ -24,8 +24,8 @@ defmodule PolyEctoTest.TestComment do
   @foreign_key_type :binary_id
 
   schema "test_comments" do
-    polymorphic_belongs_to(:commentable)
-    field(:content, :string)
+    polymorphic_belongs_to :commentable
+    field :content, :string
     timestamps()
   end
 
@@ -59,8 +59,8 @@ defmodule PolyEctoTest.TestPost do
   @primary_key {:id, :binary_id, autogenerate: true}
 
   schema "test_posts" do
-    field(:title, :string)
-    polymorphic_has_many(:comments, PolyEctoTest.TestComment, as: :commentable)
+    field :title, :string
+    polymorphic_has_many :comments, PolyEctoTest.TestComment, as: :commentable
     timestamps()
   end
 end
