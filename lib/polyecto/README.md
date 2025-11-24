@@ -1,299 +1,38 @@
 # PolyEcto - Polymorphic Associations for Ecto
 
-A generic, configurable library for polymorphic associations in Ecto schemas. PolyEcto provides a clean, efficient way to create "belongs to any" and "has many polymorphic" relationships without sacrificing Ecto's familiar patterns.
+A library for polymorphic associations in Ecto. Provides clean "belongs to any" and "has many polymorphic" relationships with efficient batch loading.
 
 ## Features
 
-- **Generic & Reusable**: Zero hardcoded relationship types - works with any schema
-- **Ecto-Native API**: Feels like standard Ecto associations
-- **Efficient Queries**: Batch loading with no N+1 queries
-- **Table-Based Storage**: Uses stable table names (not module names)
-- **Type Safe**: Full typespecs and compile-time checks
-- **Zero Dependencies**: Pure Ecto, no external libraries
+- Generic design works with any schema
+- Familiar Ecto-style API
+- Batch loading prevents N+1 queries
+- Table-based storage (stable across module renames)
+- Full typespecs and compile-time checks
+- Zero external dependencies
 
 ## Installation
 
-1. Copy the `lib/polyecto/` directory to your project
-2. Create a configuration module (see Configuration below)
-3. Add the config to your `config/config.exs`
+```elixir
+def deps do
+  [
+    {:polyecto, "~> 0.1.0"}
+  ]
+end
+```
 
 ## Configuration
 
-Create a module that implements the `PolyEcto.Config` behavior:
+Create a configuration module:
 
 ```elixir
-defmodule MyApp.PolyEctoConfig do
-  @behaviour PolyEcto.Config
-
-  @registry %{
-    "posts" => MyApp.Blog.Post,
-    "comments" => MyApp.Blog.Comment,
-    "users" => MyApp.Accounts.User,
-    "base_cards" => MyApp.Cards.BaseCard
-  }
-
-  @reverse_registry Map.new(@registry, fn {k, v} -> {v, k} end)
-
-  @impl true
-  def repo, do: MyApp.Repo
-
-  @impl true
-  def get_schema(table_name), do: Map.get(@registry, table_name)
-
-  @impl true
-  def get_table(schema_module), do: Map.get(@reverse_registry, schema_module)
-end
-```
-
-Then configure it in `config/config.exs`:
-
-```elixir
-config :polyecto, :config, MyApp.PolyEctoConfig
-```
-
-## Usage: Polymorphic Belongs To
-
-### Define the Schema
-
-Create a schema that belongs to multiple entity types:
-
-```elixir
-defmodule MyApp.Blog.Comment do
-  use Ecto.Schema
-  import PolyEcto
-
-  schema "comments" do
-    polymorphic_belongs_to :commentable
-    field :content, :text
-    field :user_id, :string
-
-    timestamps()
-  end
-
-  def changeset(comment, attrs) do
-    comment
-    |> cast(attrs, [:content, :user_id])
-    |> PolyEcto.cast_polymorphic(:commentable)
-    |> validate_required([:content, :commentable_table, :commentable_id])
-  end
-end
-```
-
-This generates three fields:
-- `commentable_table` - String field storing the table name
-- `commentable_id` - String field storing the entity ID
-- `commentable` - Virtual field for the loaded entity
-
-### Create the Migration
-
-```elixir
-defmodule MyApp.Repo.Migrations.CreateComments do
-  use Ecto.Migration
-
-  def change do
-    create table(:comments, primary_key: false) do
-      add :id, :binary_id, primary_key: true
-      add :commentable_table, :string, null: false
-      add :commentable_id, :string, null: false
-      add :content, :text, null: false
-      add :user_id, :string
-
-      timestamps()
-    end
-
-    # Critical for query performance
-    create index(:comments, [:commentable_table, :commentable_id])
-  end
-end
-```
-
-### Create Records
-
-```elixir
-# Comment on a post
-post = Repo.get!(Post, "post_123")
-comment = %Comment{commentable: post, content: "Great post!"}
-|> Comment.changeset(%{})
-|> Repo.insert!()
-
-# Comment on a card
-card = Repo.get!(BaseCard, "card_456")
-comment = %Comment{commentable: card, content: "Love this!"}
-|> Comment.changeset(%{})
-|> Repo.insert!()
-```
-
-### Load Associations
-
-```elixir
-# Load single record
-comment = Repo.get!(Comment, comment_id)
-|> PolyEcto.load_polymorphic(:commentable)
-
-comment.commentable # => %Post{...} or %BaseCard{...}
-
-# Batch preload (no N+1 queries)
-comments = Repo.all(Comment)
-|> PolyEcto.preload_polymorphic(:commentable)
-
-# Groups by table, one query per table type
-Enum.each(comments, fn c ->
-  IO.inspect(c.commentable)
-end)
-```
-
-## Usage: Polymorphic Has Many
-
-### Define the Parent Schema
-
-Add polymorphic has_many to schemas that can have comments:
-
-```elixir
-defmodule MyApp.Blog.Post do
-  use Ecto.Schema
-  import PolyEcto
-
-  schema "posts" do
-    field :title, :string
-    field :body, :text
-
-    polymorphic_has_many :comments, MyApp.Blog.Comment, as: :commentable
-
-    timestamps()
-  end
-end
-
-defmodule MyApp.Cards.BaseCard do
-  use Ecto.Schema
-  import PolyEcto
-
-  schema "base_cards" do
-    field :text, :string
-
-    polymorphic_has_many :comments, MyApp.Blog.Comment, as: :commentable
-
-    timestamps()
-  end
-end
-```
-
-This generates one virtual field:
-- `comments` - Virtual array field for loaded associations
-
-### Query Associations
-
-```elixir
-# Build a query
-post = Repo.get!(Post, "post_123")
-query = PolyEcto.polymorphic_assoc(post, :comments)
-comments = Repo.all(query)
-
-# Compose with additional filters
-recent_comments =
-  PolyEcto.polymorphic_assoc(post, :comments)
-  |> where([c], c.inserted_at > ago(7, "day"))
-  |> order_by([c], desc: c.inserted_at)
-  |> Repo.all()
-```
-
-### Preload Associations
-
-```elixir
-# Single record
-post = Repo.get!(Post, "post_123")
-|> PolyEcto.preload_polymorphic_assoc(:comments)
-
-post.comments # => [%Comment{...}, ...]
-
-# Multiple records (batch loaded, no N+1)
-posts = Repo.all(Post)
-|> PolyEcto.preload_polymorphic_assoc(:comments)
-
-Enum.each(posts, fn post ->
-  IO.puts("#{post.title} has #{length(post.comments)} comments")
-end)
-```
-
-## Custom Field Names
-
-You can customize the generated field names:
-
-```elixir
-schema "notifications" do
-  polymorphic_belongs_to :notifiable,
-    table_field: :target_table,
-    id_field: :target_id
-
-  field :message, :string
-end
-```
-
-This generates:
-- `target_table` instead of `notifiable_table`
-- `target_id` instead of `notifiable_id`
-- `notifiable` (virtual field name unchanged)
-
-## Performance
-
-### Batch Preloading
-
-PolyEcto prevents N+1 queries by grouping records by table and executing a single query per table:
-
-```elixir
-# Given 100 comments: 60 on posts, 40 on cards
-comments = Repo.all(Comment) # 1 query
-|> PolyEcto.preload_polymorphic(:commentable) # 2 queries (posts, cards)
-
-# Total: 3 queries instead of 101
-```
-
-### Indexing
-
-Always create a composite index on the polymorphic fields:
-
-```elixir
-create index(:comments, [:commentable_table, :commentable_id])
-```
-
-This enables efficient lookups when querying by parent entity.
-
-## Query Composition
-
-Polymorphic queries return standard `Ecto.Query` structs, so you can compose them:
-
-```elixir
-base_query = PolyEcto.polymorphic_assoc(post, :comments)
-
-# Add filters
-recent = base_query |> where([c], c.inserted_at > ago(7, "day"))
-
-# Add ordering
-sorted = base_query |> order_by([c], desc: c.inserted_at)
-
-# Add limits
-top_10 = base_query |> limit(10)
-
-# Combine
-top_recent =
-  base_query
-  |> where([c], c.inserted_at > ago(7, "day"))
-  |> order_by([c], desc: c.inserted_at)
-  |> limit(10)
-  |> Repo.all()
-```
-
-## Complete Example
-
-Here's a full example with posts, cards, and comments:
-
-```elixir
-# 1. Create config
 defmodule MyApp.PolyEctoConfig do
   @behaviour PolyEcto.Config
 
   @registry %{
     "posts" => MyApp.Post,
-    "base_cards" => MyApp.BaseCard
+    "comments" => MyApp.Comment,
+    "users" => MyApp.User
   }
 
   @reverse_registry Map.new(@registry, fn {k, v} -> {v, k} end)
@@ -307,13 +46,20 @@ defmodule MyApp.PolyEctoConfig do
   @impl true
   def get_table(schema_module), do: Map.get(@reverse_registry, schema_module)
 end
+```
 
-# 2. Configure
-# In config/config.exs
+Configure in `config/config.exs`:
+
+```elixir
 config :polyecto, :config, MyApp.PolyEctoConfig
+```
 
-# 3. Define schemas
-defmodule MyApp.Comment do
+## Polymorphic Belongs To
+
+Define a schema that belongs to multiple entity types:
+
+```elixir
+defmodule Comment do
   use Ecto.Schema
   import PolyEcto
 
@@ -327,115 +73,170 @@ defmodule MyApp.Comment do
     comment
     |> cast(attrs, [:content])
     |> PolyEcto.cast_polymorphic(:commentable)
-    |> validate_required([:content])
+    |> validate_required([:content, :commentable_table, :commentable_id])
   end
 end
+```
 
-defmodule MyApp.Post do
+The `polymorphic_belongs_to` macro generates:
+- `commentable_table` - stores the table name
+- `commentable_id` - stores the entity ID
+- `commentable` - virtual field for the loaded entity
+
+### Migration
+
+```elixir
+create table(:comments) do
+  add :commentable_table, :string, null: false
+  add :commentable_id, :string, null: false
+  add :content, :text
+  timestamps()
+end
+
+create index(:comments, [:commentable_table, :commentable_id])
+```
+
+### Creating Records
+
+```elixir
+post = Repo.get!(Post, 1)
+comment = %Comment{commentable: post, content: "Great post"}
+|> Comment.changeset(%{})
+|> Repo.insert!()
+```
+
+### Loading Associations
+
+```elixir
+# Single record
+comment = Repo.get!(Comment, 1)
+|> PolyEcto.load_polymorphic(:commentable)
+
+# Batch preload (prevents N+1)
+comments = Repo.all(Comment)
+|> PolyEcto.preload_polymorphic(:commentable)
+```
+
+## Polymorphic Has Many
+
+Define schemas that can have polymorphic children:
+
+```elixir
+defmodule Post do
   use Ecto.Schema
   import PolyEcto
 
   schema "posts" do
     field :title, :string
-    polymorphic_has_many :comments, MyApp.Comment, as: :commentable
+    polymorphic_has_many :comments, Comment, as: :commentable
     timestamps()
   end
 end
+```
 
-defmodule MyApp.BaseCard do
-  use Ecto.Schema
-  import PolyEcto
+### Querying Associations
 
-  schema "base_cards" do
-    field :text, :string
-    polymorphic_has_many :comments, MyApp.Comment, as: :commentable
-    timestamps()
-  end
-end
-
-# 4. Use it
+```elixir
 post = Repo.get!(Post, 1)
-card = Repo.get!(BaseCard, "card_1")
 
-# Create comments
-{:ok, comment1} = %Comment{commentable: post, content: "Great!"}
-|> Comment.changeset(%{})
-|> Repo.insert()
+# Build a query
+query = PolyEcto.polymorphic_assoc(post, :comments)
+comments = Repo.all(query)
 
-{:ok, comment2} = %Comment{commentable: card, content: "Love it!"}
-|> Comment.changeset(%{})
-|> Repo.insert()
-
-# Load belongs_to
-comment1 = PolyEcto.load_polymorphic(comment1, :commentable)
-comment1.commentable # => %Post{...}
-
-# Load has_many
-post = PolyEcto.preload_polymorphic_assoc(post, :comments)
-post.comments # => [%Comment{...}]
-
-# Query has_many
-comments = PolyEcto.polymorphic_assoc(card, :comments)
+# Compose with additional filters
+recent = PolyEcto.polymorphic_assoc(post, :comments)
+|> where([c], c.inserted_at > ago(7, "day"))
 |> Repo.all()
 ```
 
-## Advanced Usage Patterns
-
-### Filtering Polymorphic Results
-
-You can filter polymorphic associations by type before loading:
+### Preloading Associations
 
 ```elixir
-# Get only comments on posts (not cards)
-post_comments =
-  from(c in Comment, where: c.commentable_table == "posts")
-  |> Repo.all()
-  |> PolyEcto.preload_polymorphic(:commentable)
+# Single record
+post = Repo.get!(Post, 1)
+|> PolyEcto.preload_polymorphic_assoc(:comments)
 
-# Get comments on specific entity types
-entity_comments =
-  from(c in Comment, where: c.commentable_table in ["posts", "articles"])
-  |> Repo.all()
+# Multiple records (batch loaded)
+posts = Repo.all(Post)
+|> PolyEcto.preload_polymorphic_assoc(:comments)
 ```
 
-### Conditional Preloading
+## Custom Field Names
 
-Load polymorphic associations only when needed:
+Customize the generated field names:
 
 ```elixir
-def get_comment(id, preload: preload_opts) do
-  comment = Repo.get!(Comment, id)
+schema "notifications" do
+  polymorphic_belongs_to :notifiable,
+    table_field: :target_table,
+    id_field: :target_id
 
-  if Keyword.get(preload_opts, :commentable, false) do
-    PolyEcto.load_polymorphic(comment, :commentable)
-  else
-    comment
-  end
+  field :message, :string
 end
-
-# Usage
-comment = get_comment(123, preload: [commentable: true])
 ```
+
+This generates `target_table` and `target_id` instead of `notifiable_table` and `notifiable_id`.
+
+## Performance
+
+### Batch Preloading
+
+PolyEcto groups records by table and executes a single query per table:
+
+```elixir
+# 100 comments: 60 on posts, 40 on cards
+comments = Repo.all(Comment)  # 1 query
+|> PolyEcto.preload_polymorphic(:commentable)  # 2 queries (posts, cards)
+# Total: 3 queries instead of 101
+```
+
+### Indexing
+
+Always create a composite index on polymorphic fields:
+
+```elixir
+create index(:comments, [:commentable_table, :commentable_id])
+```
+
+## Query Composition
+
+Polymorphic queries return standard `Ecto.Query` structs:
+
+```elixir
+base = PolyEcto.polymorphic_assoc(post, :comments)
+
+# Add filters
+recent = base |> where([c], c.inserted_at > ago(7, "day"))
+
+# Add ordering
+sorted = base |> order_by([c], desc: c.inserted_at)
+
+# Combine
+filtered = base
+|> where([c], c.inserted_at > ago(7, "day"))
+|> order_by([c], desc: c.inserted_at)
+|> limit(10)
+|> Repo.all()
+```
+
+## Advanced Usage
 
 ### Nested Polymorphic Associations
 
 You can have polymorphic associations on both sides:
 
 ```elixir
-# Activity log entries can track actions on any entity
 defmodule ActivityLog do
   use Ecto.Schema
   import PolyEcto
 
   schema "activity_logs" do
-    polymorphic_belongs_to :target  # The entity that was acted upon
+    polymorphic_belongs_to :target
     field :action, :string
-    field :user_id, :string
     timestamps()
   end
 end
 
-# Any entity can have activity logs
 defmodule Post do
   use Ecto.Schema
   import PolyEcto
@@ -447,19 +248,31 @@ defmodule Post do
   end
 end
 
-# Load nested associations
+# Load multiple associations
 post = Repo.get!(Post, 1)
 |> PolyEcto.preload_polymorphic_assoc(:activity_logs)
 |> PolyEcto.preload_polymorphic_assoc(:comments)
 ```
 
-**Note**: Each ActivityLog belongs to one entity. This is a **one-to-many** relationship. 
-For true many-to-many polymorphic tagging, you would need a join table, which PolyEcto 
-does not provide. See the "Limitations" section below.
+Note: Each ActivityLog belongs to one entity (one-to-many). For many-to-many relationships, see the Limitations section.
 
-### Counting Polymorphic Associations
+### Filtering by Entity Type
 
-Get counts without loading full records:
+```elixir
+# Get only comments on posts
+post_comments = from(c in Comment, where: c.commentable_table == "posts")
+|> Repo.all()
+|> PolyEcto.preload_polymorphic(:commentable)
+
+# Get comments on multiple types
+entity_comments = from(c in Comment, 
+  where: c.commentable_table in ["posts", "articles"])
+|> Repo.all()
+```
+
+### Counting Associations
+
+Get counts without loading records:
 
 ```elixir
 def count_comments(entity) do
@@ -474,176 +287,102 @@ def count_comments(entity) do
   )
   |> Repo.one()
 end
-
-# Usage
-post = Repo.get!(Post, 1)
-comment_count = count_comments(post)
 ```
 
-### Aggregating Across Polymorphic Types
-
-Query across all polymorphic types:
+### Aggregating Across Types
 
 ```elixir
-# Get comment counts grouped by entity type
+# Comment counts by entity type
 from(c in Comment,
   group_by: c.commentable_table,
   select: {c.commentable_table, count(c.id)}
 )
 |> Repo.all()
-# => [{"posts", 45}, {"base_cards", 23}, {"articles", 12}]
+# Returns: [{"posts", 45}, {"cards", 23}]
 
-# Get recent comments across all types
-recent_comments =
-  from(c in Comment,
-    where: c.inserted_at > ago(7, "day"),
-    order_by: [desc: c.inserted_at]
-  )
-  |> Repo.all()
-  |> PolyEcto.preload_polymorphic(:commentable)
-```
-
-### Using with Phoenix Contexts
-
-Integrate PolyEcto into Phoenix contexts:
-
-```elixir
-defmodule MyApp.Content do
-  import Ecto.Query
-  alias MyApp.Repo
-  alias MyApp.Content.Comment
-
-  def list_comments_for(entity) do
-    PolyEcto.polymorphic_assoc(entity, :comments)
-    |> order_by(desc: :inserted_at)
-    |> Repo.all()
-  end
-
-  def create_comment(entity, attrs) do
-    %Comment{commentable: entity}
-    |> Comment.changeset(attrs)
-    |> Repo.insert()
-  end
-
-  def get_comment_with_parent(id) do
-    Repo.get!(Comment, id)
-    |> PolyEcto.load_polymorphic(:commentable)
-  end
-end
+# Recent comments across all types
+from(c in Comment,
+  where: c.inserted_at > ago(7, "day"),
+  order_by: [desc: c.inserted_at]
+)
+|> Repo.all()
+|> PolyEcto.preload_polymorphic(:commentable)
 ```
 
 ## Best Practices
 
-### 1. Always Use Composite Indexes
-
-For optimal performance, create composite indexes on polymorphic fields:
+### Use Composite Indexes
 
 ```elixir
-# Good: Composite index
+# Correct
 create index(:comments, [:commentable_table, :commentable_id])
 
-# Bad: Separate indexes (less efficient)
+# Incorrect (less efficient)
 create index(:comments, [:commentable_table])
 create index(:comments, [:commentable_id])
 ```
 
-### 2. Use Batch Preloading
-
-Always prefer batch preloading over individual loads:
+### Prefer Batch Preloading
 
 ```elixir
-# ✅ Good: Single query per table type
+# Correct
 comments = Repo.all(Comment)
 |> PolyEcto.preload_polymorphic(:commentable)
 
-# ❌ Bad: N+1 queries
+# Incorrect (N+1 queries)
 comments = Repo.all(Comment)
 |> Enum.map(&PolyEcto.load_polymorphic(&1, :commentable))
 ```
 
-### 3. Validate Polymorphic Fields
-
-Add validation in your changesets:
+### Validate Polymorphic Fields
 
 ```elixir
 def changeset(comment, attrs) do
   comment
   |> cast(attrs, [:content])
   |> PolyEcto.cast_polymorphic(:commentable)
-  |> validate_required([:content, :commentable_table, :commentable_id])
+  |> validate_required([:commentable_table, :commentable_id])
   |> validate_polymorphic_table(:commentable_table)
 end
 
 defp validate_polymorphic_table(changeset, field) do
   validate_change(changeset, field, fn _, table ->
-    valid_tables = ["posts", "base_cards", "articles"]
-
-    if table in valid_tables do
+    if table in ["posts", "cards", "articles"] do
       []
     else
-      [{field, "must be one of: #{Enum.join(valid_tables, ", ")}"}]
+      [{field, "invalid entity type"}]
     end
   end)
 end
 ```
 
-### 4. Handle Deleted Entities Gracefully
-
-Check for nil when loading polymorphic associations:
+### Handle Deleted Entities
 
 ```elixir
 comment = Repo.get!(Comment, id)
 |> PolyEcto.load_polymorphic(:commentable)
 
 case comment.commentable do
-  nil ->
-    # Entity was deleted, handle gracefully
-    Logger.warn("Commentable entity not found for comment #{id}")
+  nil -> 
+    Logger.warning("Entity not found for comment #{id}")
     render_orphaned_comment(comment)
-
-  entity ->
+  entity -> 
     render_comment_with_entity(comment, entity)
-end
-```
-
-### 5. Keep Registry Updated
-
-When adding new schemas, update your registry:
-
-```elixir
-# Add to your PolyEctoConfig module
-@registry %{
-  "posts" => MyApp.Post,
-  "base_cards" => MyApp.BaseCard,
-  "articles" => MyApp.Article  # Don't forget new schemas!
-}
-```
-
-### 6. Use Descriptive Field Names
-
-For clarity, use descriptive names when you have multiple polymorphic associations:
-
-```elixir
-schema "activities" do
-  polymorphic_belongs_to :actor  # Who performed the action
-  polymorphic_belongs_to :target # What was acted upon
-  field :action_type, :string
 end
 ```
 
 ## Common Pitfalls
 
-### Pitfall 1: Forgetting to Cast Polymorphic Fields
+### Missing cast_polymorphic
 
 ```elixir
-# ❌ Bad: Polymorphic fields not set
+# Incorrect - fields won't be set
 def changeset(comment, attrs) do
   comment
   |> cast(attrs, [:content])
-  # Missing: |> PolyEcto.cast_polymorphic(:commentable)
 end
 
-# ✅ Good: Always cast polymorphic fields
+# Correct
 def changeset(comment, attrs) do
   comment
   |> cast(attrs, [:content])
@@ -651,85 +390,49 @@ def changeset(comment, attrs) do
 end
 ```
 
-### Pitfall 2: Missing Composite Index
+### Missing Index
 
 ```elixir
-# ❌ Bad: No index on polymorphic fields
+# Incorrect - queries will be slow
 create table(:comments) do
   add :commentable_table, :string
   add :commentable_id, :string
-  add :content, :text
 end
-# Queries will be slow!
 
-# ✅ Good: Composite index for performance
+# Correct
 create table(:comments) do
   add :commentable_table, :string
   add :commentable_id, :string
-  add :content, :text
 end
 create index(:comments, [:commentable_table, :commentable_id])
 ```
 
-### Pitfall 3: Using load_polymorphic in Loops
+### Individual Loads in Loops
 
 ```elixir
-# ❌ Bad: N+1 queries
-comments = Repo.all(Comment)
+# Incorrect - N+1 queries
 Enum.each(comments, fn comment ->
   comment = PolyEcto.load_polymorphic(comment, :commentable)
   display(comment)
 end)
 
-# ✅ Good: Batch preload
-comments = Repo.all(Comment)
-|> PolyEcto.preload_polymorphic(:commentable)
-
-Enum.each(comments, fn comment ->
-  display(comment)
-end)
+# Correct - batch preload
+comments = PolyEcto.preload_polymorphic(comments, :commentable)
+Enum.each(comments, &display/1)
 ```
 
-### Pitfall 4: Wrong Config Key
+### Validating Virtual Field
 
 ```elixir
-# ❌ Bad: Wrong config key
-config :polyecto, :configuration, MyApp.PolyEctoConfig
-
-# ✅ Good: Correct config key
-config :polyecto, :config, MyApp.PolyEctoConfig
-```
-
-### Pitfall 5: Forgetting to Add Tables to Registry
-
-```elixir
-# ❌ Bad: New table not in registry
-@registry %{
-  "posts" => MyApp.Post
-  # Forgot to add "articles" table!
-}
-
-# When loading Article comments, commentable will be nil
-
-# ✅ Good: All tables in registry
-@registry %{
-  "posts" => MyApp.Post,
-  "articles" => MyApp.Article
-}
-```
-
-### Pitfall 6: Incorrect Field Validation
-
-```elixir
-# ❌ Bad: Validating virtual field
+# Incorrect
 def changeset(comment, attrs) do
   comment
   |> cast(attrs, [:content])
   |> PolyEcto.cast_polymorphic(:commentable)
-  |> validate_required([:commentable])  # Virtual field!
+  |> validate_required([:commentable])  # Virtual field
 end
 
-# ✅ Good: Validate actual database fields
+# Correct
 def changeset(comment, attrs) do
   comment
   |> cast(attrs, [:content])
@@ -738,235 +441,88 @@ def changeset(comment, attrs) do
 end
 ```
 
-### Pitfall 7: Hardcoding Table Names
-
-```elixir
-# ❌ Bad: Hardcoded table name
-from(c in Comment, where: c.commentable_table == "posts")
-
-# ✅ Good: Use config to get table name
-table_name = PolyEcto.config().get_table(Post)
-from(c in Comment, where: c.commentable_table == ^table_name)
-```
-
 ## Migration Patterns
 
 ### Basic Polymorphic Table
 
 ```elixir
-defmodule MyApp.Repo.Migrations.CreateComments do
-  use Ecto.Migration
-
-  def change do
-    create table(:comments, primary_key: false) do
-      add :id, :binary_id, primary_key: true
-      add :commentable_table, :string, null: false
-      add :commentable_id, :string, null: false
-      add :content, :text, null: false
-      add :user_id, :string
-
-      timestamps()
-    end
-
-    create index(:comments, [:commentable_table, :commentable_id])
-    create index(:comments, [:user_id])
-  end
+create table(:comments) do
+  add :commentable_table, :string, null: false
+  add :commentable_id, :string, null: false
+  add :content, :text
+  timestamps()
 end
+
+create index(:comments, [:commentable_table, :commentable_id])
 ```
 
 ### Multiple Polymorphic Associations
 
 ```elixir
-defmodule MyApp.Repo.Migrations.CreateActivities do
-  use Ecto.Migration
-
-  def change do
-    create table(:activities, primary_key: false) do
-      add :id, :binary_id, primary_key: true
-
-      # Actor: who performed the action
-      add :actor_table, :string, null: false
-      add :actor_id, :string, null: false
-
-      # Target: what was acted upon
-      add :target_table, :string, null: false
-      add :target_id, :string, null: false
-
-      add :action_type, :string, null: false
-
-      timestamps()
-    end
-
-    # Index for finding activities by actor
-    create index(:activities, [:actor_table, :actor_id])
-
-    # Index for finding activities by target
-    create index(:activities, [:target_table, :target_id])
-
-    # Index for filtering by action type
-    create index(:activities, [:action_type])
-  end
+create table(:activities) do
+  add :actor_table, :string, null: false
+  add :actor_id, :string, null: false
+  add :target_table, :string, null: false
+  add :target_id, :string, null: false
+  add :action_type, :string
+  timestamps()
 end
+
+create index(:activities, [:actor_table, :actor_id])
+create index(:activities, [:target_table, :target_id])
 ```
 
 ### Adding Polymorphic Fields to Existing Table
 
 ```elixir
-defmodule MyApp.Repo.Migrations.AddPolymorphicToComments do
-  use Ecto.Migration
-
-  def change do
-    alter table(:comments) do
-      add :commentable_table, :string
-      add :commentable_id, :string
-    end
-
-    # Backfill existing data if needed
-    execute """
-    UPDATE comments
-    SET commentable_table = 'posts',
-        commentable_id = post_id::text
-    WHERE post_id IS NOT NULL
-    """
-
-    # Make fields required after backfill
-    alter table(:comments) do
-      modify :commentable_table, :string, null: false
-      modify :commentable_id, :string, null: false
-    end
-
-    # Remove old foreign key column
-    alter table(:comments) do
-      remove :post_id
-    end
-
-    create index(:comments, [:commentable_table, :commentable_id])
-  end
+alter table(:comments) do
+  add :commentable_table, :string
+  add :commentable_id, :string
 end
-```
 
-## Troubleshooting
+# Backfill existing data
+execute """
+UPDATE comments
+SET commentable_table = 'posts',
+    commentable_id = post_id::text
+WHERE post_id IS NOT NULL
+"""
 
-### Config not set error
+# Make required after backfill
+alter table(:comments) do
+  modify :commentable_table, :string, null: false
+  modify :commentable_id, :string, null: false
+end
 
-```
-PolyEcto config not set. Add to config.exs:
-    config :polyecto, :config, YourConfigModule
-```
+alter table(:comments) do
+  remove :post_id
+end
 
-**Solution**: Add the config line to `config/config.exs` and restart your application.
-
-### Unknown table error
-
-If you see `nil` when loading associations, the table might not be in your registry.
-
-**Solution**: Add the table → module mapping to your config's `@registry`:
-
-```elixir
-@registry %{
-  "posts" => MyApp.Post,
-  "missing_table" => MyApp.MissingModule  # Add this
-}
-```
-
-### Slow queries
-
-If queries are slow, check your indexes:
-
-```elixir
-# Required index for performance
 create index(:comments, [:commentable_table, :commentable_id])
 ```
 
-### N+1 queries
-
-Use batch preloading instead of individual loads:
-
-```elixir
-# Bad: N+1 queries
-comments = Repo.all(Comment)
-Enum.map(comments, fn c ->
-  PolyEcto.load_polymorphic(c, :commentable)
-end)
-
-# Good: Batch load
-comments = Repo.all(Comment)
-|> PolyEcto.preload_polymorphic(:commentable)
-```
-
-### Virtual field is nil after insert
-
-The virtual field is not automatically loaded after insert:
-
-```elixir
-# Virtual field is nil after insert
-{:ok, comment} = %Comment{commentable: post}
-|> Comment.changeset(%{content: "Great!"})
-|> Repo.insert()
-
-comment.commentable # => nil (virtual field not persisted)
-
-# Solution: Reload if needed
-comment = PolyEcto.load_polymorphic(comment, :commentable)
-comment.commentable # => %Post{...}
-```
-
-## Design Decisions
-
-### Why table names instead of module names?
-
-- **Stable**: Module renames don't break existing data
-- **Portable**: Works across different namespaces
-- **Queryable**: Easy to filter by table in SQL
-- **Clear**: Obvious what entity it references
-
-### Why manual registry?
-
-- **Explicit**: No magic, clear mapping
-- **Flexible**: Override table → module mapping as needed
-- **Safe**: No runtime discovery issues
-- **Simple**: Easy to understand and debug
-
-### Why no referential integrity?
-
-Databases cannot enforce foreign keys to multiple tables. This is a fundamental limitation, not a PolyEcto issue. This is the same approach used by:
-- Ruby on Rails polymorphic associations
-- Laravel polymorphic relationships
-- Django GenericForeignKey
-
-**Mitigation**: Use application-level validation and be careful when deleting entities that may have polymorphic references.
-
-### Why string IDs?
-
-- **Universal**: Handles UUIDs, custom strings, and numeric IDs
-- **Simple**: Single column type
-- **Flexible**: Cast to proper type when loading
-
 ## Limitations
 
-### What PolyEcto Does NOT Support
+### Many-to-Many Polymorphic Relationships
 
-**Many-to-Many Polymorphic Relationships**
+PolyEcto supports only one-to-many polymorphic relationships:
 
-PolyEcto only supports **one-to-many** polymorphic relationships:
-- ✅ A Comment belongs to one Post/Article/Card (polymorphic belongs_to)
-- ✅ A Post has many Comments (polymorphic has_many)
-- ❌ A Tag belongs to many Posts/Articles/Cards (many-to-many)
+- Supported: A Comment belongs to one Post/Article (polymorphic belongs_to)
+- Supported: A Post has many Comments (polymorphic has_many)
+- Not supported: A Tag belongs to many Posts/Articles (many-to-many)
 
-**Why Not?**
-
-For many-to-many polymorphic relationships (like tagging), you need a **join table**:
+For many-to-many polymorphic relationships, use a join table:
 
 ```elixir
-# This DOES NOT work with PolyEcto:
+# This does not work with PolyEcto
 defmodule Tag do
   schema "tags" do
-    polymorphic_belongs_to :taggable  # ❌ Can only tag ONE entity
+    polymorphic_belongs_to :taggable  # Can only tag ONE entity
     field :name, :string
   end
 end
 
-# You need a join table instead:
+# Use a join table instead
 defmodule Tag do
   schema "tags" do
     field :name, :string
@@ -977,78 +533,162 @@ end
 defmodule Tagging do
   schema "taggings" do
     belongs_to :tag, Tag
-    polymorphic_belongs_to :taggable  # ✅ Each tagging links one tag to one entity
+    polymorphic_belongs_to :taggable  # Each tagging links one tag to one entity
   end
 end
 ```
 
-**When to Use PolyEcto**:
-- Comments on multiple entity types ✅
-- Activity logs for any entity ✅
-- Notifications about different entities ✅
-- File attachments to various records ✅
+### Appropriate Use Cases
 
-**When NOT to Use PolyEcto**:
-- Tagging systems (need many-to-many) ❌
-- Categories shared by multiple entities ❌
-- Any scenario where the relationship is many-to-many ❌
+**When to use PolyEcto:**
+- Comments on multiple entity types
+- Activity logs for any entity
+- Notifications about different entities
+- File attachments to various records
+
+**When not to use PolyEcto:**
+- Tagging systems (need many-to-many)
+- Categories shared by multiple entities
+- Any scenario requiring many-to-many relationships
+
+## Troubleshooting
+
+### Config Not Set Error
+
+```
+PolyEcto config not set. Add to config.exs:
+    config :polyecto, :config, YourConfigModule
+```
+
+Solution: Add the config line to `config/config.exs` and restart.
+
+### Unknown Table Error
+
+If associations load as `nil`, the table may not be in your registry.
+
+Solution: Add the table-to-module mapping:
+
+```elixir
+@registry %{
+  "posts" => MyApp.Post,
+  "missing_table" => MyApp.MissingModule
+}
+```
+
+### Slow Queries
+
+Check your indexes:
+
+```elixir
+create index(:comments, [:commentable_table, :commentable_id])
+```
+
+### N+1 Queries
+
+Use batch preloading:
+
+```elixir
+# Correct
+comments = Repo.all(Comment)
+|> PolyEcto.preload_polymorphic(:commentable)
+```
+
+## Design Decisions
+
+### Table Names vs Module Names
+
+PolyEcto uses table names instead of module names for stability:
+- Module renames don't break existing data
+- Works across different namespaces
+- Easy to filter by table in SQL
+- Clear reference to the entity
+
+### Manual Registry
+
+The explicit registry provides:
+- No magic or runtime discovery issues
+- Clear, debuggable mapping
+- Flexibility to override mappings
+- Simple to understand
+
+### No Referential Integrity
+
+Databases cannot enforce foreign keys to multiple tables. This is a fundamental limitation of polymorphic associations, not specific to PolyEcto. The same approach is used by:
+- Ruby on Rails polymorphic associations
+- Laravel polymorphic relationships
+- Django GenericForeignKey
+
+Mitigation: Use application-level validation and handle deleted entities gracefully.
+
+### String IDs
+
+Polymorphic ID fields use strings for universality:
+- Handles UUIDs, integers, and custom IDs
+- Single column type simplifies implementation
+- Values are cast to proper type when loading
 
 ## API Reference
 
 ### Macros
 
-- `polymorphic_belongs_to(name, opts \\ [])` - Define polymorphic belongs_to
-- `polymorphic_has_many(name, queryable, as: field)` - Define polymorphic has_many
+**`polymorphic_belongs_to(name, opts \\ [])`**
+
+Defines a polymorphic belongs_to association.
+
+Options:
+- `:table_field` - Custom name for the table field
+- `:id_field` - Custom name for the ID field
+
+**`polymorphic_has_many(name, queryable, opts)`**
+
+Defines a polymorphic has_many association.
+
+Options:
+- `:as` - Required. Name of the polymorphic association in the target schema
 
 ### Functions
 
-- `cast_polymorphic(changeset, field)` - Cast polymorphic association in changeset
-- `load_polymorphic(record, field)` - Load association for single record
-- `preload_polymorphic(records, field)` - Batch load belongs_to associations
-- `polymorphic_assoc(struct, field)` - Build query for has_many associations
-- `preload_polymorphic_assoc(records, field)` - Batch load has_many associations
+**`cast_polymorphic(changeset, field)`**
+
+Casts a polymorphic association in a changeset.
+
+**`load_polymorphic(record, field)`**
+
+Loads a polymorphic association for a single record.
+
+**`preload_polymorphic(records, field)`**
+
+Batch preloads polymorphic belongs_to associations.
+
+**`polymorphic_assoc(struct, field)`**
+
+Builds an Ecto.Query for polymorphic has_many associations.
+
+**`preload_polymorphic_assoc(records, field)`**
+
+Batch preloads polymorphic has_many associations.
 
 ### Behaviors
 
-- `PolyEcto.Config` - Implement this for configuration
+**`PolyEcto.Config`**
 
-## Module Structure
-
-```
-lib/polyecto/
-├── polyecto.ex      - Main module with macros and public API
-├── belongs_to.ex    - Polymorphic belongs_to implementation
-├── has_many.ex      - Polymorphic has_many implementation
-├── config.ex        - Configuration behavior
-├── helpers.ex       - Shared utility functions
-└── README.md        - This file
-```
+Callbacks:
+- `repo/0` - Returns the Ecto.Repo module
+- `get_schema/1` - Returns schema module for a table name
+- `get_table/1` - Returns table name for a schema module
 
 ## Testing
 
-PolyEcto includes comprehensive tests. See:
-- `test/polyecto/belongs_to_test.exs`
-- `test/polyecto/has_many_test.exs`
-- `test/polyecto/integration_test.exs`
+The package includes a comprehensive test suite with 61 tests covering:
+- Polymorphic belongs_to functionality
+- Polymorphic has_many functionality
+- Batch loading and N+1 prevention
+- Edge cases (nil values, missing entities)
+- Integration scenarios
+- Performance with large datasets
 
-## License
+Run tests:
 
-MIT
-
-## Contributing
-
-PolyEcto is designed to be generic and reusable. When contributing:
-- Keep it generic - no domain-specific logic
-- Maintain backward compatibility
-- Add tests for new features
-- Update documentation
-
-## Future Enhancements
-
-Potential future additions (not currently implemented):
-- Polymorphic many-to-many through tables
-- Automatic schema registry generation
-- Database validation helpers
-- Query optimization hints
-- Support for polymorphic associations across databases
-
+```bash
+mix test
+```
